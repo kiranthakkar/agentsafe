@@ -10,8 +10,8 @@ from agentsafe.sdk import AgentSafe
 app = typer.Typer(no_args_is_help=True, add_completion=False)
 
 
-def _safe(path: Path, **settings: str | None) -> AgentSafe:
-    return AgentSafe(path, **settings)
+def _safe(path: Path) -> AgentSafe:
+    return AgentSafe(path)
 
 
 def _handle(action: object) -> None:
@@ -24,16 +24,16 @@ def _handle(action: object) -> None:
 
 @app.command()
 def init(
+    application: str = typer.Option(..., "--application"),
     profile: str | None = typer.Option(None),
     compartment: str | None = typer.Option(None),
     crypto_endpoint: str | None = typer.Option(None, "--crypto-endpoint"),
     key_id: str | None = typer.Option(None, "--key-id"),
-    path: Path = typer.Option(Path("appconfig"), "--path"),
 ) -> None:
-    """Create global OCI settings and an empty appconfig without overwriting either."""
+    """Create a named OCI application configuration."""
     _handle(
         lambda: AgentSafe.init(
-            path,
+            application=application,
             profile=profile,
             compartment=compartment,
             crypto_endpoint=crypto_endpoint,

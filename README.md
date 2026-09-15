@@ -5,7 +5,7 @@ file. Encryption and decryption are performed by a customer-managed OCI KMS key;
 the file never contains plaintext or key material.
 
 ```console
-agentsafe init --profile DEFAULT --compartment <compartment-ocid> \
+agentsafe init --application <name> --profile DEFAULT --compartment <compartment-ocid> \
   --crypto-endpoint <vault-crypto-url> --key-id <key-ocid>
 agentsafe set OPENAI_API_KEY
 agentsafe get OPENAI_API_KEY
@@ -24,9 +24,11 @@ python -m pip install "agentconfigsafe[oci]"
 ```
 
 Configure the KMS settings once with `agentsafe init` (shown above), or supply
-them directly when constructing `AgentSafe`. The default store is `appconfig`
-in the process's current directory; pass an explicit path when the application
-does not run from its project directory.
+them directly when constructing `AgentSafe`. `init` stores named application
+profiles only in `~/.agentsafe/config`. The ciphertext store is created on the
+first `set`; by default it is `appconfig` in the process's current directory.
+Pass an explicit path when the application does not run from its project
+directory.
 
 ```python
 from pathlib import Path
@@ -35,6 +37,7 @@ from agentsafe import AgentSafe, KeyNotFoundError
 
 safe = AgentSafe(
     Path("/srv/my-service/appconfig"),
+    application="billing",
     profile="DEFAULT",
     compartment="ocid1.compartment.oc1..example",
     crypto_endpoint="https://example-crypto.kms.us-phoenix-1.oraclecloud.com",
@@ -50,8 +53,13 @@ except KeyNotFoundError:
 # Pass ``api_key`` directly to your API client; do not log it or write it to disk.
 ```
 
-Settings resolve in this order: constructor arguments, `AGENTSAFE_*`
-environment variables, then `~/.agentsafe/config`. The KMS provider defaults
+`~/.agentsafe/config` stores named application profiles, so different
+applications can use separate profiles, compartments, vault endpoints, and
+keys. `agentsafe init --application billing ...` registers that named profile;
+use `application="billing"` when constructing an SDK instance to select it.
+Settings resolve in this order: constructor arguments,
+`AGENTSAFE_*` environment variables, the selected application's `appconfig`,
+then `~/.agentsafe/config` as a machine-wide fallback. The KMS provider defaults
 to OCI; the OCI profile, compartment OCID, crypto endpoint, and key OCID must
 all be configured. `get()` decrypts only for the duration of the call;
 `list_keys()` returns names without decrypting values.

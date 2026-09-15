@@ -33,3 +33,14 @@ def test_initialize_refuses_overwrite(tmp_path):
     store.initialize()
     with pytest.raises(ConfigError):
         store.initialize()
+
+
+def test_store_contains_only_ciphertext_entries_not_kms_configuration(tmp_path):
+    path = tmp_path / "appconfig"
+    store = ConfigStore(path)
+    store.initialize()
+    store.set("TOKEN", EncryptedBlob("oci", "ciphertext", {}))
+
+    document = json.loads(path.read_text())
+    assert "kms_config" not in document
+    assert document["entries"]["TOKEN"]["ciphertext"] == "ciphertext"

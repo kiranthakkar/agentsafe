@@ -3,7 +3,11 @@
 from pathlib import Path
 from typing import Any
 
-from agentsafe.config import CONFIG_PATH, resolve_settings, write_config
+from agentsafe.config import (
+    CONFIG_PATH,
+    resolve_settings,
+    write_config,
+)
 from agentsafe.exceptions import ConfigError
 from agentsafe.kms import get_provider
 from agentsafe.kms.base import KMSProvider
@@ -13,20 +17,25 @@ from agentsafe.store import ConfigStore
 class AgentSafe:
     """Store and retrieve string configuration values encrypted by a KMS provider."""
 
-    def __init__(self, appconfig_path: Path | str = "appconfig", **settings: Any) -> None:
-        """Create a client using explicit settings, environment, then global configuration."""
-        self.settings = resolve_settings(settings)
-        self.store = ConfigStore(appconfig_path)
-
-    @classmethod
-    def init(
-        cls,
+    def __init__(
+        self,
         appconfig_path: Path | str = "appconfig",
         *,
         config_path: Path = CONFIG_PATH,
         **settings: Any,
+    ) -> None:
+        """Create a client using explicit, environment, named application, then global settings."""
+        self.store = ConfigStore(appconfig_path)
+        self.settings = resolve_settings(settings, config_path=config_path)
+
+    @classmethod
+    def init(
+        cls,
+        *,
+        config_path: Path = CONFIG_PATH,
+        **settings: Any,
     ) -> "AgentSafe":
-        """Create global settings and an empty project store without overwriting either."""
+        """Register one named application KMS configuration without touching appconfig."""
         resolved = resolve_settings(settings, config_path=config_path)
         provider = resolved.get("kms_provider", "oci")
         if provider == "oci":
@@ -37,13 +46,11 @@ class AgentSafe:
             ]
             if missing:
                 raise ConfigError(f"OCI configuration requires: {', '.join(missing)}")
-        store = ConfigStore(appconfig_path)
-        if config_path.exists() or store.path.exists():
-            target = config_path if config_path.exists() else store.path
-            raise ConfigError(f"init refused to overwrite existing file: {target}")
-        write_config(resolved, config_path)
-        store.initialize()
-        return cls(appconfig_path, **resolved)
+        application = resolved.get("application")
+        if not isinstance(application, str) or not application:
+            raise ConfigError("init requires a non-empty application name")
+        write_config(resolved, config_path, application=application)
+        return cls(config_path=config_path, **resolved)
 
     def set(self, key: str, value: str) -> None:
         """Encrypt and store a string value under a non-empty configuration name."""
@@ -51,6 +58,7 @@ class AgentSafe:
         if not isinstance(value, str):
             raise ConfigError("configuration values must be strings")
         provider = self._provider()
+        self.store.ensure_initialized()
         self.store.set(key, provider.encrypt(value))
 
     def get(self, key: str) -> str:

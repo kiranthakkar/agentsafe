@@ -10,6 +10,12 @@ def test_cli_includes_command_aliases():
         assert command in result.output
 
 
+def test_init_requires_an_application_name():
+    result = CliRunner().invoke(app, ["init"])
+    assert result.exit_code == 2
+    assert "--application" in result.output
+
+
 def test_list_never_gets_a_value(monkeypatch):
     class FakeSafe:
         def list_keys(self):

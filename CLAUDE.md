@@ -41,12 +41,12 @@ Agent developers use `agentsafe` two ways:
 - **KMS-backed encryption, no local keys.** `agentsafe` calls the configured
   provider's Encrypt/Decrypt API for every operation. It stores key/vault
   identifiers, never key material.
-- **`appconfig` file.** The on-disk artifact holding all encrypted parameters
-  for a project — a **JSON** document mapping each config name to a
-  provider-tagged ciphertext envelope (see schema below). No plaintext value
-  is ever written into this file. Chosen over YAML/TOML because it needs no
-  extra dependency and the file is machine-written/machine-read only — no one
-  hand-edits a file full of opaque ciphertext.
+- **`appconfig` file.** The on-disk artifact holding each application's
+  encrypted parameters — a **JSON** document mapping config names to
+  provider-tagged ciphertext envelopes (see schema below). KMS configuration
+  lives only in `~/.agentsafe/config`. No plaintext secret value is ever
+  written into this file. Chosen over YAML/TOML because it needs no extra
+  dependency and the file is machine-written/machine-read only.
 - **OCI profile-based auth (for the OCI provider).** Relies on the standard
   OCI SDK/CLI config file (`~/.oci/config`) and profiles — `agentsafe` does
   not implement its own auth. Each provider owns its own auth mechanism (see
@@ -140,6 +140,13 @@ by the `provider` tag:
   Azure: `key_id`/`key_version`). Centralizing a typed schema per provider in
   core was rejected — it would mean every new provider, including
   third-party ones, requires a core code change, defeating the plugin model.
+- `appconfig` never stores KMS configuration. OCI settings are held only in the
+  named application sections of `~/.agentsafe/config`; this keeps a ciphertext
+  store independent of KMS configuration and permits it to be created lazily
+  on the first `set` operation.
+- `application` is a required non-empty name supplied to `init`. It identifies
+  the matching named configuration in `~/.agentsafe/config`; later SDK/CLI
+  calls select that profile using the same argument or `AGENTSAFE_APPLICATION`.
 
 ## Architecture
 
@@ -167,7 +174,7 @@ pyproject.toml
 ```
 
 Data flow for a `get`:
-`SDK/CLI call` → `store.py` reads `appconfig`, finds the entry for the key →
+`SDK/CLI call` → `store.py` reads `appconfig` and finds the entry for the key →
 `kms/__init__.py` resolves the entry's `provider` tag to a `KMSProvider`
 (loading its entry point lazily) → `provider.decrypt(blob)` calls the
 backend's decrypt API using that provider's own credentials/endpoint →
@@ -175,23 +182,26 @@ plaintext returned to the caller only, never written back to disk or logged.
 
 ## Settings & file locations
 
-- **`~/.agentsafe/config`** (INI-style) — machine-wide default settings:
-  `kms_provider`, `profile`, `compartment`, `crypto_endpoint`, `key_id`, and future
-  per-provider settings. Written by `agentsafe init`, analogous to
-  `~/.oci/config`/`~/.aws/config`.
-- **No project-local settings file in v1.** A project needing a different
-  provider/profile/compartment than the machine default overrides via env
-  vars or CLI flags — no second settings-file tier to design/maintain until
-  real usage shows env vars aren't enough.
+- **`~/.agentsafe/config`** (INI-style) — a named application configuration
+  registry. `init --application billing` creates an `[application:billing]`
+  section containing `application`, `kms_provider`, `profile`, `compartment`,
+  `crypto_endpoint`, `key_id`, and future provider settings. Multiple sections
+  let one customer create independent `AgentSafe` instances for many
+  applications. The legacy `[agentsafe]` section remains an optional fallback.
+- **Application-local KMS settings are supported in v1.** Each project stores
+  its selected provider and provider settings in its own `appconfig`. A
+  customer may therefore use different OCI profiles, compartments, crypto
+  endpoints, and key OCIDs across applications on the same machine.
 - **`appconfig` is per-project, cwd-based** (e.g. `./appconfig`) — every
-  project keeps its own secret set. The global settings file only supplies
-  *which KMS to talk to*; it never determines *which secrets* are visible.
+  project keeps its own ciphertext secret set. KMS configuration is selected
+  from the named application registry in `~/.agentsafe/config`.
 
 Settings resolution order (first match wins):
-1. Explicit constructor/CLI arguments
-2. Environment variables: `AGENTSAFE_KMS_PROVIDER`, `AGENTSAFE_PROFILE`, `AGENTSAFE_COMPARTMENT`, `AGENTSAFE_CRYPTO_ENDPOINT`, `AGENTSAFE_KEY_ID`
-3. `~/.agentsafe/config`
-4. For `kms_provider` only, select `oci` when it remains unspecified.
+1. Explicit constructor/CLI arguments (including `application`)
+2. Environment variables: `AGENTSAFE_APPLICATION`, `AGENTSAFE_KMS_PROVIDER`, `AGENTSAFE_PROFILE`, `AGENTSAFE_COMPARTMENT`, `AGENTSAFE_CRYPTO_ENDPOINT`, `AGENTSAFE_KEY_ID`
+3. The selected named `[application:<application>]` section in `~/.agentsafe/config`
+4. The legacy `[agentsafe]` global fallback section
+5. For `kms_provider` only, select `oci` when it remains unspecified.
    For every other required setting, raise a clear `ConfigError` — never
    silently fall back to defaults for security-relevant settings.
 
@@ -202,6 +212,7 @@ from agentsafe import AgentSafe
 
 safe = AgentSafe(
     kms_provider="oci",  # selected by default when omitted
+    application="billing",  # selects [application:billing]
     profile="DEFAULT",
     compartment="ocid1.compartment.oc1..xxxx",  # OCID only, no name resolution (see below)
     crypto_endpoint="https://<vault>-crypto.kms.<region>.oraclecloud.com",
@@ -248,16 +259,18 @@ prompts etc. are still available; fits a type-hint-first codebase with less
 boilerplate than raw Click).
 
 ```
-agentsafe init   --profile DEFAULT --compartment <ocid> --crypto-endpoint <url> --key-id <ocid>
+agentsafe init   --application billing --profile DEFAULT --compartment <ocid> --crypto-endpoint <url> --key-id <ocid>
 agentsafe set    OPENAI_API_KEY [VALUE]   # prompts (hidden input) if VALUE omitted
 agentsafe get    OPENAI_API_KEY
 agentsafe remove OPENAI_API_KEY
 agentsafe list                            # key names only — see below
 ```
 
-`init` writes the resolved settings into `~/.agentsafe/config` and creates an
-empty `appconfig` in the current directory. It fails if either target already
-exists; it never overwrites an existing configuration or secret store. It does not create cloud
+`init` requires `--application` and writes the resolved settings only to its
+named `[application:<name>]` section in `~/.agentsafe/config`. It never reads,
+creates, or overwrites `appconfig`; the ciphertext store is created lazily by
+the first `set`. `init` fails only if that named application configuration
+already exists. It does not create cloud
 resources (vault, key, compartment) — those are assumed to already exist and
 be reachable via the given profile/credentials.
 
@@ -270,8 +283,9 @@ configured.
 
 - Plaintext values must never be written to disk, logs, shell history files,
   or exception messages/tracebacks.
-- `appconfig` contains ciphertext and metadata only — never plaintext, never
-  raw key material.
+- `appconfig` contains ciphertext envelopes and metadata only — never plaintext
+  secret values, KMS configuration, raw key material, private keys, or auth
+  tokens.
 - Decryption happens only in memory at the moment the SDK/CLI caller requests
   a value; do not cache decrypted plaintext beyond that call's return.
 - Key material and key versions live only in the KMS backend (whichever
