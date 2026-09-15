@@ -3,8 +3,8 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agentsafe"
-version = "0.1.0"
+name = "agentconfigsafe"
+version = "0.1.1"
 description = "KMS-backed configuration storage for AI agent applications"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -32,7 +32,7 @@ Issues = "https://github.com/kiranthakkar/agentsafe/issues"
 
 [project.optional-dependencies]
 oci = ["oci>=2.100"]
-dev = ["agentsafe[oci]", "mypy>=1.8", "pytest>=8", "ruff>=0.5"]
+dev = ["agentconfigsafe[oci]", "mypy>=1.8", "pytest>=8", "ruff>=0.5"]
 
 [project.scripts]
 agentsafe = "agentsafe.cli:app"

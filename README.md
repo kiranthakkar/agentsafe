@@ -20,7 +20,7 @@ hidden prompt (omit `VALUE`) or pipe the value to standard input.
 Install the OCI provider extra in the application environment:
 
 ```console
-python -m pip install "agentsafe[oci]"
+python -m pip install "agentconfigsafe[oci]"
 ```
 
 Configure the KMS settings once with `agentsafe init` (shown above), or supply
@@ -55,3 +55,6 @@ environment variables, then `~/.agentsafe/config`. The KMS provider defaults
 to OCI; the OCI profile, compartment OCID, crypto endpoint, and key OCID must
 all be configured. `get()` decrypts only for the duration of the call;
 `list_keys()` returns names without decrypting values.
+
+The PyPI distribution is named `agentconfigsafe`; the Python import and CLI
+remain `agentsafe`.

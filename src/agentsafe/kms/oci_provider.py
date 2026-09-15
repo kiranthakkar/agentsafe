@@ -34,7 +34,7 @@ class OCIProvider:
         try:
             import oci  # type: ignore[import-untyped]
         except ImportError as error:
-            raise ConfigError("provider 'oci' requires oci: pip install agentsafe[oci]") from error
+            raise ConfigError("provider 'oci' requires oci: pip install agentconfigsafe[oci]") from error
         try:
             configuration = oci.config.from_file(profile_name=profile)
             self._client = oci.key_management.KmsCryptoClient(

@@ -93,7 +93,7 @@ class KMSProvider(Protocol):
   specific provider is chosen (via `AGENTSAFE_KMS_PROVIDER` or equivalent).
   Selecting OCI without its optional SDK installed raises a clear
   `ConfigError` (for example, `"provider 'oci' requires oci: pip install
-  agentsafe[oci]"`) at selection time.
+  agentconfigsafe[oci]"`) at selection time.
 - **Name collisions are a hard error at discovery time.** If two distinct
   entry points claim the same provider name (e.g. a third-party package
   also registers `"aws"`), raise a `ConfigError` naming both conflicting
@@ -104,7 +104,7 @@ class KMSProvider(Protocol):
   crypto endpoint + key OCID. AWS: profile/region + key ARN. GCP: service account/ADC +
   key resource name. Azure: `DefaultAzureCredential` chain + vault URL +
   key name. `store.py`/`sdk.py`/`cli.py` never know these details.
-- **The OCI SDK is an optional extra**: `agentsafe[oci]`. Installing bare
+- **The OCI SDK is an optional extra**: `agentconfigsafe[oci]`. Installing bare
   `agentsafe` pulls in no cloud-provider SDK. Future providers will add their
   own optional extras when implemented.
 - **Adding a backend (built-in or third-party) never requires touching**
@@ -156,7 +156,7 @@ agentsafe/
   kms/
     __init__.py     # entry-point discovery + factory: get_provider(name) -> KMSProvider
     base.py         # KMSProvider Protocol + EncryptedBlob type
-    oci_provider.py # OCI KMS implementation (oci.key_management + oci.kms_crypto), extra: agentsafe[oci]
+    oci_provider.py # OCI KMS implementation (oci.key_management + oci.kms_crypto), extra: agentconfigsafe[oci]
 tests/
   test_kms_contract.py  # fake in-memory KMSProvider; exercises store.py/sdk.py/cli.py logic, no real crypto
   test_kms_oci.py       # unittest.mock.patch on the oci client; verifies request/response mapping only
@@ -321,15 +321,15 @@ configured.
 ## Dependencies (expected)
 
 - `oci` — the OCI Python SDK (`oci.key_management` + `oci.kms_crypto`). Used
-  by `kms/oci_provider.py` only, behind the `agentsafe[oci]` extra.
+  by `kms/oci_provider.py` only, behind the `agentconfigsafe[oci]` extra.
 - Future provider SDKs are added as optional extras only when their providers
   are implemented (for example, `boto3` for AWS).
 - `typer` — CLI framework.
 - `filelock` — advisory locking for `appconfig` writes.
 - No custom cryptography implementation — all encrypt/decrypt is delegated to
   the configured KMS provider.
-- Package name **`agentsafe` is available on PyPI** (verified: unregistered
-  as of this writing).
+- PyPI distribution name **`agentconfigsafe`**; the Python import package and
+  CLI command remain **`agentsafe`**.
 - **Python 3.10+** — modern `X | Y` union hints without `__future__` imports,
   and the clean keyword-arg form of `importlib.metadata.entry_points(group=...)`.
 
