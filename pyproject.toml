@@ -1,0 +1,59 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentsafe"
+version = "0.1.0"
+description = "KMS-backed configuration storage for AI agent applications"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+authors = [{ name = "Kiran Thakkar" }]
+keywords = ["agents", "configuration", "kms", "oci", "secrets"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security :: Cryptography",
+]
+dependencies = ["filelock>=3.13", "typer>=0.9"]
+
+[project.urls]
+Homepage = "https://github.com/kiranthakkar/agentsafe"
+Repository = "https://github.com/kiranthakkar/agentsafe"
+Issues = "https://github.com/kiranthakkar/agentsafe/issues"
+
+[project.optional-dependencies]
+oci = ["oci>=2.100"]
+dev = ["agentsafe[oci]", "mypy>=1.8", "pytest>=8", "ruff>=0.5"]
+
+[project.scripts]
+agentsafe = "agentsafe.cli:app"
+
+[project.entry-points."agentsafe.kms_providers"]
+oci = "agentsafe.kms.oci_provider:OCIProvider"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentsafe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint.per-file-ignores]
+"src/agentsafe/cli.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+mypy_path = "src"
