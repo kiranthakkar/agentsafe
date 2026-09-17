@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentconfigsafe"
-version = "0.1.2"
+version = "0.2.0"
 description = "KMS-backed configuration storage for AI agent applications"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +23,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
   "Topic :: Security :: Cryptography",
 ]
-dependencies = ["filelock>=3.13", "typer>=0.9"]
+dependencies = ["filelock>=3.13", "typer>=0.9", "python-dotenv>=1.0"]
 
 [project.urls]
 Homepage = "https://github.com/kiranthakkar/agentsafe"

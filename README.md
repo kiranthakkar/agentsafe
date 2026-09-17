@@ -13,33 +13,45 @@ are named `agentsafe`.
 
 Applications often need sensitive configuration but should not keep it in
 source control, plaintext `.env` files, or application configuration files.
-`agentsafe` keeps encrypted values in a project-local `appconfig` file while
-leaving encryption authority with the customer’s OCI KMS key and IAM policies.
+`agentsafe` keeps encrypted values in project-local files — a JSON `appconfig`
+store, a standard-shaped `.env` file, or both — while leaving encryption
+authority with the customer's OCI KMS key and IAM policies.
 
 Common uses include:
 
 - API keys for LLM, SaaS, or third-party integrations used by AI agents.
 - Database connection strings, webhook secrets, and service credentials.
-- Separate KMS settings for development, billing, analytics, or other
-  applications on the same machine.
+- Teams that want their encrypted secrets and KMS settings checked into git
+  and shared, so a fresh clone has everything it needs except each
+  developer's own local OCI credentials.
 - Setup scripts that configure a secret once, followed by runtime SDK reads.
 
 ## Security model
 
-- Plaintext values are encrypted through OCI KMS before they reach `appconfig`.
-- `appconfig` contains ciphertext envelopes and provider metadata only; it
-  never contains plaintext values, OCI credentials, or key material.
-- OCI KMS configuration is stored separately in named sections of
-  `~/.agentsafe/config`, not in `appconfig`.
-- `get()` decrypts in memory only for the duration of the call. Values are not
+- Plaintext values are encrypted through OCI KMS before they reach
+  `appconfig` or `.env`.
+- `appconfig` and `.env` contain ciphertext envelopes and provider metadata
+  only; neither ever contains plaintext values, OCI credentials, or key
+  material.
+- OCI KMS configuration is stored separately in the project-local
+  `.agentsafe/config` file, not in `appconfig`/`.env`. Unlike ciphertext,
+  these are identifiers (a key OCID, a crypto endpoint URL, a profile name)
+  — safe to commit alongside the ciphertext they route to, since OCI itself
+  never treats an OCID or endpoint as a secret.
+- `get()` decrypts in memory only for the duration of the call (or, for
+  `env.load()`, until it populates `os.environ`). Values are not otherwise
   cached by `agentsafe`.
-- `list` returns names only and never calls KMS Decrypt.
-- `agentsafe` relies on OCI’s standard profile configuration and IAM. It does
+- `list` and `env list` return names only and never call KMS Decrypt.
+- `agentsafe` relies on OCI's standard profile configuration and IAM. It does
   not implement a second authentication system.
+- `.env.agent` is the one place a developer types a real secret in the
+  clear — it is never committed, and `agentsafe env encrypt` warns if it
+  isn't gitignored. The compiled `.env` it produces is always fully
+  encrypted.
 
 Avoid placing real secrets directly in shell arguments: they can be exposed in
-shell history and process listings. Prefer the hidden `set` prompt or a
-carefully controlled standard-input workflow.
+shell history and process listings. Prefer the hidden `set` prompt or piping
+the value on stdin.
 
 ## Install
 
@@ -54,18 +66,19 @@ a KMS key that the profile is allowed to use for Encrypt and Decrypt.
 
 ## Quick start: CLI
 
-Create a named application profile. This writes OCI identifiers and profile
-settings to `~/.agentsafe/config`; it does not create or modify `appconfig`.
+Create the project-local KMS configuration. This writes OCI identifiers to
+`.agentsafe/config` in the current directory; it does not create or modify
+`appconfig`.
 
 ```console
-agentsafe init --application billing --profile DEFAULT \
-  --compartment <compartment-ocid> \
+agentsafe init --profile DEFAULT \
   --crypto-endpoint https://<vault>-crypto.kms.<region>.oraclecloud.com \
   --key-id <key-ocid>
+agentsafe config  # displays the project KMS configuration; does not contact KMS
 ```
 
-Store a value. Omitting the value opens a hidden prompt; the first `set`
-creates the local `appconfig` ciphertext store.
+Store a value. Omitting the value opens a hidden prompt (or reads piped
+stdin); the first `set` creates the local `appconfig` ciphertext store.
 
 ```console
 agentsafe set OPENAI_API_KEY
@@ -74,75 +87,107 @@ agentsafe list
 agentsafe remove OPENAI_API_KEY
 ```
 
-Use `--path /path/to/appconfig` with `set`, `get`, `list`, or `remove` when an
-application’s ciphertext store is not in the current directory.
+Use `--path /path/to/appconfig` with `set`, `get`, `list`, or `remove` when a
+project's ciphertext store is not in the current directory.
 
-## Multiple applications
+`.agentsafe/config` and `appconfig` are both project-local and safe to commit
+to git together — a teammate who clones the repo only needs their own OCI
+profile locally (see "Security model") to decrypt.
 
-Each `init --application <name>` call adds a separate section such as
-`[application:billing]` to `~/.agentsafe/config`. This permits independent OCI
-profiles, compartments, vault crypto endpoints, and key OCIDs for different
-applications.
+## `.env` support
+
+A second, parallel store for teams whose other tooling (frameworks,
+`docker compose`, CI systems) already auto-loads a `.env` file. It uses the
+same KMS-backed encryption and the same `.agentsafe/config` settings as
+`appconfig` — just persisted as `KEY=value` lines instead of JSON.
+
+Write real values into `.env.agent` (plaintext, gitignored, never
+committed), then compile it into a fully-encrypted, git-committable `.env`:
 
 ```console
-agentsafe init --application billing --profile BILLING_PROFILE ...
-agentsafe init --application analytics --profile ANALYTICS_PROFILE ...
+echo 'OPENAI_API_KEY=sk-...' >> .env.agent
+agentsafe env encrypt
 ```
 
-Select the intended application from Python with `application="billing"`, or
-set `AGENTSAFE_APPLICATION=billing` for a process.
+`.env` now holds `OPENAI_API_KEY="agentsafe:v1:<base64 ciphertext envelope>"`
+— safe to commit. `agentsafe env encrypt` always fully regenerates `.env`
+from `.env.agent`; `.env` is a derived artifact and shouldn't be hand-edited.
+
+Single-entry equivalents of `set`/`get`/`remove`/`list` are also available:
+
+```console
+agentsafe env set OPENAI_API_KEY
+agentsafe env get OPENAI_API_KEY
+agentsafe env list
+agentsafe env remove OPENAI_API_KEY
+```
+
+From Python, decrypt everything into `os.environ` (like `dotenv.load_dotenv()`),
+or fetch one value at a time:
+
+```python
+from agentsafe import env
+
+env.load()                          # decrypts every .env entry into os.environ
+api_key = env.get("OPENAI_API_KEY")  # decrypts one value without touching os.environ
+```
+
+There is deliberately no CLI command that decrypts everything to stdout —
+consume decrypted values via `env.load()`/`env.get()` in your application,
+not by piping a CLI dump.
 
 ## Python SDK
-
-After initializing a named profile, use it from an application:
 
 ```python
 from pathlib import Path
 
-from agentsafe import AgentSafe, KeyNotFoundError
+from agentsafe import AgentSafe, AgentSafeError
 
-safe = AgentSafe(
-    Path("/srv/billing/appconfig"),
-    application="billing",
-)
+safe = AgentSafe(Path("/srv/billing/appconfig"))
 
 try:
     api_key = safe.get("OPENAI_API_KEY")
-except KeyNotFoundError:
-    raise RuntimeError("OPENAI_API_KEY has not been configured") from None
+except AgentSafeError as error:
+    # Covers a missing key (KeyNotFoundError), a project that hasn't been
+    # initialized or has no appconfig yet (ConfigError), and KMS auth/access
+    # failures (KMSError) — catch the common base class so none of them
+    # surface as a raw traceback.
+    raise RuntimeError(f"could not read OPENAI_API_KEY: {error}") from None
 
 # Pass api_key directly to the consuming client. Do not log or persist it.
 ```
 
-For initial provisioning from Python, register the profile first:
+For initial provisioning from Python, register the project's KMS settings
+first:
 
 ```python
 from agentsafe import AgentSafe
 
 AgentSafe.init(
-    application="billing",
     profile="DEFAULT",
-    compartment="ocid1.compartment.oc1..example",
     crypto_endpoint="https://example-crypto.kms.us-phoenix-1.oraclecloud.com",
     key_id="ocid1.key.oc1..example",
 )
 ```
 
 Settings resolve in this order: explicit SDK/CLI arguments, `AGENTSAFE_*`
-environment variables, the selected named application profile in
-`~/.agentsafe/config`, then a legacy global fallback section. OCI is the
-default provider; OCI requires a profile, compartment OCID, crypto endpoint,
-and key OCID.
+environment variables, then the project-local `.agentsafe/config` file. OCI
+is the default provider; OCI requires a profile, crypto endpoint, and key
+OCID — no compartment, since OCI's Encrypt/Decrypt API doesn't take one.
+`profile` is the one setting that legitimately
+varies per developer (it names a profile in *their* `~/.oci/config`) — set
+`AGENTSAFE_PROFILE` locally if it differs from what's committed.
 
-## Example
+## Examples
 
-See [examples/README.md](examples/README.md) for a runnable example that
-initializes a `demo` profile, stores a non-sensitive validation value, and
-reads it back through OCI KMS.
+See [examples/README.md](examples/README.md) for two runnable examples: one
+initializes a project-local configuration, stores a non-sensitive validation
+value in `appconfig`, and reads it back through OCI KMS; the other does the
+same round trip through the `.env`/`.env.agent` store.
 
 ## Current scope
 
 OCI KMS is the bundled provider in this release. The provider architecture uses
 Python entry points so additional customer-managed KMS backends can be added
-without changing the storage or SDK layers. Key rotation, bulk import/export,
-and cloud resource creation are intentionally outside the current scope.
+without changing the storage or SDK layers. Key rotation and cloud resource
+creation are intentionally outside the current scope.

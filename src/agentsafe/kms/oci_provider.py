@@ -14,7 +14,6 @@ class OCIProvider:
         self,
         *,
         profile: str | None = None,
-        compartment: str | None = None,
         crypto_endpoint: str | None = None,
         key_id: str | None = None,
         **_: Any,
@@ -23,7 +22,6 @@ class OCIProvider:
             label
             for label, value in {
                 "profile": profile,
-                "compartment": compartment,
                 "crypto_endpoint": crypto_endpoint,
                 "key_id": key_id,
             }.items()

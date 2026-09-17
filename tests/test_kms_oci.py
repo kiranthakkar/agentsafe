@@ -47,7 +47,6 @@ def test_oci_request_and_response_mapping(monkeypatch):
     monkeypatch.setitem(sys.modules, "oci", fake_oci)
     provider = OCIProvider(
         profile="DEFAULT",
-        compartment="ocid1.compartment.oc1..x",
         crypto_endpoint="https://crypto.example.test",
         key_id="ocid1.key.oc1..x",
     )

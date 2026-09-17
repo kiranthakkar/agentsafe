@@ -26,15 +26,36 @@ class ConfigStore:
     def initialize(self) -> None:
         """Create an empty store and fail safely if it already exists."""
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with self._lock():
+            self._initialize_locked()
+
+    def _initialize_locked(self) -> None:
+        """Publish an empty store without exposing a partially-written file."""
         document: dict[str, Any] = {"schema_version": SCHEMA_VERSION, "entries": {}}
         try:
-            with self.path.open("x", encoding="utf-8") as handle:
-                os.chmod(self.path, 0o600)
+            descriptor, temp_name = tempfile.mkstemp(
+                prefix=".appconfig-", dir=self.path.parent, text=True
+            )
+        except OSError as error:
+            raise ConfigError(f"could not create appconfig at {self.path}") from error
+        try:
+            os.fchmod(descriptor, 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
                 json.dump(document, handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            # link() atomically publishes the completed file but, unlike replace(),
+            # refuses to overwrite a store created by another process.
+            os.link(temp_name, self.path)
         except FileExistsError as error:
             raise ConfigError(f"appconfig already exists at {self.path}") from error
         except OSError as error:
             raise ConfigError(f"could not create appconfig at {self.path}") from error
+        finally:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
 
     def list_keys(self) -> list[str]:
         return list(self._read_entries().keys())
@@ -43,9 +64,10 @@ class ConfigStore:
         """Create an empty ciphertext store on the first write only."""
         if self.path.exists():
             return
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with self._lock():
             if not self.path.exists():
-                self.initialize()
+                self._initialize_locked()
 
     def get(self, key: str) -> EncryptedBlob:
         entries = self._read_entries()

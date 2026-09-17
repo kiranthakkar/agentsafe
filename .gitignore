@@ -5,5 +5,16 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 dist/
-appconfig
+
+# Local ad-hoc testing artifacts in the repo root only. examples/ intentionally
+# commits its own appconfig/.env demo — see examples/README.md.
+/appconfig
+/.agentsafe/
+/.env
+
+# Lock files and .env.agent are never safe or useful to commit, anywhere.
 appconfig.lock
+.agentsafe/*.lock
+.env.lock
+.env.agent
+.env.agent.lock

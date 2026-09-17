@@ -6,11 +6,12 @@ the round trip; never use this pattern to print a real production secret.
 """
 
 import os
+import sys
 from pathlib import Path
 
 from agentsafe import AgentSafe
+from agentsafe.exceptions import AgentSafeError
 
-APPLICATION = "demo"
 APPCONFIG_PATH = Path(__file__).parent / "appconfig"
 DEMO_KEY = "DEMO_SECRET"
 DEMO_VALUE = os.environ.get("AGENTSAFE_DEMO_SECRET", "demo-value-not-a-real-secret")
@@ -18,7 +19,7 @@ DEMO_VALUE = os.environ.get("AGENTSAFE_DEMO_SECRET", "demo-value-not-a-real-secr
 
 def main() -> None:
     """Encrypt a demonstration value, then decrypt it to validate the setup."""
-    safe = AgentSafe(APPCONFIG_PATH, application=APPLICATION)
+    safe = AgentSafe(APPCONFIG_PATH)
     safe.set(DEMO_KEY, DEMO_VALUE)
     retrieved_value = safe.get(DEMO_KEY)
 
@@ -29,4 +30,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except AgentSafeError as error:
+        print(f"agentsafe error: {error}", file=sys.stderr)
+        print("Have you run `agentsafe init` yet? See this directory's README.", file=sys.stderr)
+        sys.exit(1)

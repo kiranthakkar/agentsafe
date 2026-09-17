@@ -24,7 +24,7 @@ class AgentSafe:
         config_path: Path = CONFIG_PATH,
         **settings: Any,
     ) -> None:
-        """Create a client using explicit, environment, named application, then global settings."""
+        """Create a client using explicit, environment, then project-local settings."""
         self.store = ConfigStore(appconfig_path)
         self.settings = resolve_settings(settings, config_path=config_path)
 
@@ -35,21 +35,18 @@ class AgentSafe:
         config_path: Path = CONFIG_PATH,
         **settings: Any,
     ) -> "AgentSafe":
-        """Register one named application KMS configuration without touching appconfig."""
+        """Register the project-local KMS configuration without touching appconfig."""
         resolved = resolve_settings(settings, config_path=config_path)
         provider = resolved.get("kms_provider", "oci")
         if provider == "oci":
             missing = [
                 key
-                for key in ("profile", "compartment", "crypto_endpoint", "key_id")
+                for key in ("profile", "crypto_endpoint", "key_id")
                 if not resolved.get(key)
             ]
             if missing:
                 raise ConfigError(f"OCI configuration requires: {', '.join(missing)}")
-        application = resolved.get("application")
-        if not isinstance(application, str) or not application:
-            raise ConfigError("init requires a non-empty application name")
-        write_config(resolved, config_path, application=application)
+        write_config(resolved, config_path)
         return cls(config_path=config_path, **resolved)
 
     def set(self, key: str, value: str) -> None:
