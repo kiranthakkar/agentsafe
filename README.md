@@ -9,6 +9,9 @@ Oracle Cloud Infrastructure (OCI) KMS key.
 The PyPI distribution is named `agentconfigsafe`; Python imports and the CLI
 are named `agentsafe`.
 
+# How to use it?
+![demo](docs/demo.gif)
+
 ## Why use it?
 
 Applications often need sensitive configuration but should not keep it in
