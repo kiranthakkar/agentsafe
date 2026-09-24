@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import threading
 import warnings
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,21 @@ from agentsafe.kms.base import KMSProvider
 DEFAULT_ENV_PATH = Path(".env")
 DEFAULT_ENV_AGENT_PATH = Path(".env.agent")
 
+# Principal-mode signers are costly to build, so module-level calls share one provider per
+# (provider name, resolved settings). This caches a client, never decrypted plaintext.
+_PROVIDER_CACHE: dict[tuple[str, tuple[tuple[str, str], ...]], KMSProvider] = {}
+_PROVIDER_CACHE_LOCK = threading.Lock()
+
+
+def _provider_for(name: str, settings: dict[str, Any]) -> KMSProvider:
+    key = (name, tuple(sorted((k, str(v)) for k, v in settings.items())))
+    with _PROVIDER_CACHE_LOCK:
+        provider = _PROVIDER_CACHE.get(key)
+        if provider is None:
+            provider = get_provider(name, **settings)
+            _PROVIDER_CACHE[key] = provider
+        return provider
+
 
 def load(
     path: Path | str = DEFAULT_ENV_PATH,
@@ -27,14 +43,9 @@ def load(
     """Decrypt every entry in `.env` and populate `os.environ`."""
     resolved = resolve_settings(settings, config_path=config_path)
     store = EnvStore(path)
-    providers: dict[str, KMSProvider] = {}
     for key in store.list_keys():
         blob = store.get(key)
-        provider = providers.get(blob.provider)
-        if provider is None:
-            provider = get_provider(blob.provider, **resolved)
-            providers[blob.provider] = provider
-        os.environ[key] = provider.decrypt(blob)
+        os.environ[key] = _provider_for(blob.provider, resolved).decrypt(blob)
 
 
 def get(
@@ -47,7 +58,7 @@ def get(
     """Decrypt and return one `.env` value without touching `os.environ`."""
     resolved = resolve_settings(settings, config_path=config_path)
     blob = EnvStore(path).get(key)
-    return get_provider(blob.provider, **resolved).decrypt(blob)
+    return _provider_for(blob.provider, resolved).decrypt(blob)
 
 
 def set(
@@ -62,7 +73,7 @@ def set(
     if not isinstance(value, str):
         raise ConfigError("configuration values must be strings")
     resolved = resolve_settings(settings, config_path=config_path)
-    provider = get_provider(resolved["kms_provider"], **resolved)
+    provider = _provider_for(resolved["kms_provider"], resolved)
     EnvStore(path).set(key, provider.encrypt(value))
 
 
@@ -90,7 +101,7 @@ def encrypt(
     _warn_if_not_gitignored(source_path)
 
     resolved = resolve_settings(settings, config_path=config_path)
-    provider = get_provider(resolved["kms_provider"], **resolved)
+    provider = _provider_for(resolved["kms_provider"], resolved)
 
     plaintext_entries = {
         key: value for key, value in dotenv_values(source_path).items() if value is not None

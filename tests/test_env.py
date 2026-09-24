@@ -19,7 +19,10 @@ class FakeProvider:
 
 @pytest.fixture(autouse=True)
 def _fake_provider(monkeypatch):
+    env._PROVIDER_CACHE.clear()
     monkeypatch.setattr("agentsafe.env.get_provider", lambda _name, **_settings: FakeProvider())
+    yield
+    env._PROVIDER_CACHE.clear()
 
 
 def test_set_and_get_round_trip(tmp_path):
@@ -96,7 +99,9 @@ def test_encrypt_fully_regenerates_dest(tmp_path):
 
 def test_encrypt_requires_an_existing_source(tmp_path):
     with pytest.raises(ConfigError):
-        env.encrypt(tmp_path / "missing.env.agent", tmp_path / ".env", config_path=tmp_path / "config")
+        env.encrypt(
+            tmp_path / "missing.env.agent", tmp_path / ".env", config_path=tmp_path / "config"
+        )
 
 
 def test_encrypt_rejects_invalid_key_names_in_source(tmp_path):
@@ -124,3 +129,24 @@ def test_encrypt_does_not_warn_if_source_is_gitignored(tmp_path):
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         env.encrypt(source, tmp_path / ".env", config_path=tmp_path / "config")
+
+
+def test_module_level_calls_reuse_one_provider_per_settings(monkeypatch, tmp_path):
+    path = tmp_path / ".env"
+    config = tmp_path / "config"
+    env.set("TOKEN", "secret", path, config_path=config)
+
+    constructed = []
+
+    def build(name, **settings):
+        constructed.append((name, settings.get("profile")))
+        return FakeProvider()
+
+    monkeypatch.setattr("agentsafe.env.get_provider", build)
+    env.get("TOKEN", path, config_path=config, profile="A")
+    env.get("TOKEN", path, config_path=config, profile="A")
+    env.load(path, config_path=config, profile="A")
+    assert constructed == [("fake", "A")]
+
+    env.get("TOKEN", path, config_path=config, profile="B")
+    assert constructed == [("fake", "A"), ("fake", "B")]

@@ -40,13 +40,21 @@ def _read_secret() -> str:
 
 @app.command()
 def init(
-    profile: str | None = typer.Option(None),
+    auth_type: str | None = typer.Option(
+        None,
+        "--auth-type",
+        help="profile (default), instance_principal, or resource_principal.",
+    ),
+    profile: str | None = typer.Option(
+        None, help="OCI config profile; only used by --auth-type profile."
+    ),
     crypto_endpoint: str | None = typer.Option(None, "--crypto-endpoint"),
     key_id: str | None = typer.Option(None, "--key-id"),
 ) -> None:
-    """Create the project-local OCI configuration at .agentsafe/config."""
+    """Create the project-local OCI configuration at .agentsafe/config (never contacts OCI)."""
     _handle(
         lambda: AgentSafe.init(
+            auth_type=auth_type,
             profile=profile,
             crypto_endpoint=crypto_endpoint,
             key_id=key_id,

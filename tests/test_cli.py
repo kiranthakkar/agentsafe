@@ -149,3 +149,44 @@ def test_env_encrypt_forwards_source_and_dest(monkeypatch, tmp_path):
     assert result.exit_code == 0
     assert str(captured["source"]) == str(source)
     assert str(captured["dest"]) == str(dest)
+
+
+def test_init_supports_instance_principal_without_a_profile(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "init",
+            "--auth-type",
+            "instance_principal",
+            "--crypto-endpoint",
+            "https://crypto.example.test",
+            "--key-id",
+            "ocid1.key.oc1..x",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    shown = CliRunner().invoke(app, ["config"])
+    assert "auth_type=instance_principal" in shown.output
+    assert "profile" not in shown.output
+
+
+def test_init_rejects_an_unknown_auth_type(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(
+        app,
+        [
+            "init",
+            "--auth-type",
+            "api_key",
+            "--crypto-endpoint",
+            "https://crypto.example.test",
+            "--key-id",
+            "ocid1.key.oc1..x",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "profile, instance_principal, resource_principal" in result.output
+    assert "Traceback" not in result.output

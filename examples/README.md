@@ -11,7 +11,8 @@ example to print real production secrets.
 ## Prerequisites
 
 - Python 3.10+
-- OCI credentials configured in `~/.oci/config`
+- OCI credentials configured in `~/.oci/config` (or, when running on OCI,
+  an instance/resource principal — use `--auth-type` below)
 - An OCI vault crypto endpoint and a key OCID that the selected profile can
   use for encryption and decryption
 
@@ -32,6 +33,10 @@ agentsafe init --profile DEFAULT \
   --crypto-endpoint <vault-crypto-endpoint> \
   --key-id <key-ocid>
 ```
+
+On an OCI instance or in an OCI service, replace `--profile DEFAULT` with
+`--auth-type instance_principal` (or `resource_principal`); the examples
+themselves need no changes.
 
 The plaintext `examples/.env.agent` and the examples' lock files are ignored
 by Git. A consuming project would typically commit `.agentsafe/config`,

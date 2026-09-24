@@ -37,6 +37,11 @@ Agent developers use `agentsafe` two ways:
 > raw file → compiled file → `env.get()`, is reused, not its encryption
 > model), and dropping `compartment` as an agentsafe setting entirely (see
 > "Core concepts") since OCI's Encrypt/Decrypt calls never used it.
+>
+> Landed since v0.2.0, not yet released: OCI **instance principal** and
+> **resource principal** authentication alongside the existing profile-based
+> auth, selected by a new `auth_type` setting — see "OCI authentication
+> modes".
 
 ## Core concepts
 
@@ -55,20 +60,27 @@ Agent developers use `agentsafe` two ways:
   JSON — for teams whose other tooling already auto-loads `.env`. See
   "`.env` support" below; `appconfig` and `.env` are independent, parallel
   stores, not two views of the same data.
-- **OCI profile-based auth (for the OCI provider).** Relies on the standard
-  OCI SDK/CLI config file (`~/.oci/config`) and profiles — `agentsafe` does
-  not implement its own auth. Each provider owns its own auth mechanism (see
-  below); "profile" is an OCI-specific concept, not a cross-provider one.
-- **Three required OCI settings**, independently configurable by the end
-  user (not hardcoded): **profile name**, **KMS vault crypto endpoint** (the
-  per-vault URL used for Encrypt/Decrypt, distinct from the KMS management
-  endpoint), and **KMS key OCID**. The key OCID is required for Encrypt; it
-  is also recorded in each OCI ciphertext envelope so the correct key can be
-  used for Decrypt. A compartment OCID is deliberately not one of these —
-  OCI's Encrypt/Decrypt (crypto-plane) API takes only a key OCID and the
-  vault's crypto endpoint; compartment scoping only matters for KMS
-  management-plane calls (e.g. listing/creating keys), which agentsafe never
-  makes.
+- **OCI authentication (for the OCI provider).** `agentsafe` does not
+  implement its own auth; the OCI provider supports three modes, all thin
+  wrappers over the OCI Python SDK, selected by the `auth_type` setting:
+  **profile** (the default — a profile in the standard OCI SDK/CLI config
+  file, `~/.oci/config`), **instance principal** (the identity of the OCI
+  compute instance the app runs on), and **resource principal** (credentials
+  injected by an OCI service such as OCI Functions or Data Science). The
+  principal modes exist so production workloads on OCI need no API key or
+  `~/.oci/config` on disk at all. See "OCI authentication modes". Each
+  provider owns its own auth mechanism (see below); "profile" and
+  `auth_type` are OCI-specific concepts, not cross-provider ones.
+- **Required OCI settings**, independently configurable by the end user (not
+  hardcoded): **KMS vault crypto endpoint** (the per-vault URL used for
+  Encrypt/Decrypt, distinct from the KMS management endpoint) and **KMS key
+  OCID** are always required; **profile name** is required only when
+  `auth_type` is `profile`. The key OCID is required for Encrypt; it is also
+  recorded in each OCI ciphertext envelope so the correct key can be used for
+  Decrypt. A compartment OCID is deliberately not one of these — OCI's
+  Encrypt/Decrypt (crypto-plane) API takes only a key OCID and the vault's
+  crypto endpoint; compartment scoping only matters for KMS management-plane
+  calls (e.g. listing/creating keys), which agentsafe never makes.
 - **Pluggable KMS backend via entry-point plugins.** See the dedicated
   section below — this is a first-class, public-API-level design constraint,
   not an implementation detail.
@@ -111,8 +123,9 @@ class KMSProvider(Protocol):
   packages and require the user to uninstall one. Never silently shadow one
   provider with another — this is a security-critical selection, not a
   cosmetic conflict, so it must never resolve by implicit import order.
-- **Each provider owns its own auth/config.** OCI: profile + crypto endpoint
-  + key OCID. AWS: profile/region + key ARN. GCP: service account/ADC +
+- **Each provider owns its own auth/config.** OCI: auth mode (`auth_type`:
+  profile, instance principal, or resource principal) + crypto endpoint +
+  key OCID (+ profile name in profile mode). AWS: profile/region + key ARN. GCP: service account/ADC +
   key resource name. Azure: `DefaultAzureCredential` chain + vault URL +
   key name. `store.py`/`sdk.py`/`cli.py` never know these details.
 - **The OCI SDK is an optional extra**: `agentconfigsafe[oci]`. Installing bare
@@ -151,6 +164,9 @@ by the `provider` tag:
   Azure: `key_id`/`key_version`). Centralizing a typed schema per provider in
   core was rejected — it would mean every new provider, including
   third-party ones, requires a core code change, defeating the plugin model.
+  `metadata` also never records *how* the writer authenticated (profile vs.
+  principal) — auth mode is a runtime/deployment concern, not a property of
+  the ciphertext.
 - `appconfig` never stores KMS configuration. OCI settings are held only in
   the project-local `.agentsafe/config` file; this keeps a ciphertext store
   independent of KMS configuration and permits it to be created lazily on
@@ -166,7 +182,7 @@ Target package layout (`src/` layout):
 ```
 agentsafe/
   __init__.py       # public SDK surface: AgentSafe class
-  config.py         # resolves agentsafe's own settings: profile, crypto endpoint, key ID, kms provider
+  config.py         # resolves agentsafe's own settings: auth type, profile, crypto endpoint, key ID, kms provider
   store.py          # appconfig file: JSON schema, atomic write (temp file + os.replace), advisory file lock
   envstore.py       # .env / .env.agent files: dotenv schema, atomic write, advisory file lock (sibling to store.py)
   sdk.py            # AgentSafe class: init(), set(key, value), get(key), remove(key), list_keys()
@@ -176,10 +192,10 @@ agentsafe/
   kms/
     __init__.py     # entry-point discovery + factory: get_provider(name) -> KMSProvider
     base.py         # KMSProvider Protocol + EncryptedBlob type
-    oci_provider.py # OCI KMS implementation (oci.key_management + oci.kms_crypto), extra: agentconfigsafe[oci]
+    oci_provider.py # OCI KMS implementation (oci.key_management + oci.kms_crypto; profile, instance-principal, and resource-principal auth), extra: agentconfigsafe[oci]
 tests/
   test_kms_contract.py  # fake in-memory KMSProvider; exercises store.py/sdk.py/cli.py logic, no real crypto
-  test_kms_oci.py       # unittest.mock.patch on the oci client; verifies request/response mapping only
+  test_kms_oci.py       # unittest.mock.patch on the oci client/signers; verifies request/response mapping and per-auth_type client construction only
   test_store.py         # appconfig schema/round-trip, concurrency/locking
   test_envstore.py      # .env/.env.agent schema/round-trip, concurrency/locking (mirrors test_store.py)
   test_env.py           # env module: load()/get()/set()/remove()/list_keys()/encrypt(), fake KMSProvider
@@ -202,8 +218,9 @@ instead of `store.py`/`sdk.py`.
 - **`.agentsafe/config`** (INI-style, **project-local**, cwd-based — e.g.
   `./.agentsafe/config`) — replaces the earlier home-directory
   `~/.agentsafe/config` registry. `init` creates a single flat `[agentsafe]`
-  section containing `kms_provider`, `profile`, `crypto_endpoint`, `key_id`,
-  and future provider settings. `init` fails only if this file already
+  section containing `kms_provider`, `auth_type` (optional; OCI only — see
+  "OCI authentication modes"), `profile`, `crypto_endpoint`, `key_id`, and
+  future provider settings. `init` fails only if this file already
   exists; there is no home-directory fallback and no named-application
   indirection — one project directory has exactly one implicit KMS profile.
   (This replaces the named-application/`--application` model from the
@@ -211,21 +228,25 @@ instead of `store.py`/`sdk.py`.
   deliberately no compartment setting — OCI's Encrypt/Decrypt API doesn't
   take one (see "Core concepts").
 - **Why project-local, and why this is safe to commit to git.** `profile`,
-  `crypto_endpoint`, and `key_id` are identifiers, not secrets — OCI's own
-  security model assumes an OCID or endpoint URL grants
+  `crypto_endpoint`, `key_id`, and `auth_type` are identifiers or mode names,
+  not secrets — OCI's own security model assumes an OCID or endpoint URL grants
   no access without a correctly-scoped IAM policy and valid local
   credentials, the same reasoning that already lets `appconfig`'s ciphertext
   envelopes reference a `key_id` in the clear. Committing `.agentsafe/config`
   alongside `appconfig`/`.env` means a fresh clone has everything needed to
   decrypt except each developer's own local OCI credentials — nothing
   sensitive crosses git.
-- **`profile` is the one field that legitimately varies per developer** —
-  it names a profile in that developer's own `~/.oci/config`, which is
-  never committed. A developer whose local OCI CLI profile is named
-  differently from what's committed overrides it with `AGENTSAFE_PROFILE`
-  (explicit/env values still win over the file — see resolution order
-  below); this needs no special-case code, since it falls out of the
-  existing precedence rules.
+- **`profile` and `auth_type` are the fields that legitimately vary per
+  developer or environment.** `profile` names a profile in that developer's
+  own `~/.oci/config`, which is never committed; a developer whose local OCI
+  CLI profile is named differently from what's committed overrides it with
+  `AGENTSAFE_PROFILE`. Likewise the same committed config can serve a laptop
+  (`auth_type = profile`) and a production OCI instance
+  (`AGENTSAFE_AUTH_TYPE=instance_principal` set in the deployment
+  environment) — which is why a committed `profile` value is *ignored*, not
+  rejected, when `auth_type` is a principal mode. Explicit/env values still
+  win over the file (see resolution order below); this needs no
+  special-case code, since it falls out of the existing precedence rules.
 - **`appconfig` and `.env`/`.env.agent` are per-project, cwd-based**
   (e.g. `./appconfig`, `./.env.agent`, `./.env`) — every project keeps its
   own ciphertext secret set(s), resolved against that same project's
@@ -233,11 +254,98 @@ instead of `store.py`/`sdk.py`.
 
 Settings resolution order (first match wins):
 1. Explicit constructor/CLI arguments
-2. Environment variables: `AGENTSAFE_KMS_PROVIDER`, `AGENTSAFE_PROFILE`, `AGENTSAFE_CRYPTO_ENDPOINT`, `AGENTSAFE_KEY_ID`
+2. Environment variables: `AGENTSAFE_KMS_PROVIDER`, `AGENTSAFE_AUTH_TYPE`, `AGENTSAFE_PROFILE`, `AGENTSAFE_CRYPTO_ENDPOINT`, `AGENTSAFE_KEY_ID`
 3. The project-local `.agentsafe/config` file's `[agentsafe]` section
 4. For `kms_provider` only, select `oci` when it remains unspecified.
    For every other required setting, raise a clear `ConfigError` — never
    silently fall back to defaults for security-relevant settings.
+
+`auth_type` is an OCI-provider setting, like `profile`: core resolves it with
+the same precedence and forwards it unchanged, and the OCI provider treats an
+absent value as `profile`. That default is not a "silent fallback" in the
+sense of rule 4 — it preserves the behavior of every pre-existing config
+file, and it is the mode that requires the most explicit setup (a named
+profile), so an OCI workload never authenticates as its host instance or
+service unless someone opted in.
+
+## OCI authentication modes
+
+The OCI provider supports three ways of obtaining credentials, selected by
+the `auth_type` setting. `agentsafe` never implements authentication itself:
+each mode is a thin wrapper over a config loader or signer in the OCI Python
+SDK, and agentsafe never persists any credential, token, or certificate.
+
+| `auth_type` | Credentials come from | Required settings | Typical environment |
+|---|---|---|---|
+| `profile` (default) | a profile in `~/.oci/config` (`oci.config.from_file`) | `profile`, `crypto_endpoint`, `key_id` | developer laptops, CI with an OCI config |
+| `instance_principal` | the OCI compute instance's own identity (`oci.auth.signers.InstancePrincipalsSecurityTokenSigner`) | `crypto_endpoint`, `key_id` | apps running on OCI Compute instances |
+| `resource_principal` | credentials an OCI service injects into the workload (`oci.auth.signers.get_resource_principals_signer`) | `crypto_endpoint`, `key_id` | OCI Functions, Data Science jobs/notebooks, other services that provide resource principals |
+
+- **Opt-in, never automatic.** `auth_type` defaults to `profile`. There is no
+  auto-detection and no credential chain ("try instance principal, then
+  profile, ..."): which identity encrypts and decrypts your secrets is a
+  security-critical selection, so it is always explicit — the same reasoning
+  as provider-name collisions never resolving by import order.
+- **No fallback between modes.** If the selected mode fails to authenticate
+  (not on an OCI instance, no injected resource-principal credentials, IAM
+  denies the key), the operation fails with a typed `KMSError`, chained to
+  the SDK exception as its cause. It never retries with another mode.
+- **`auth_type` is validated.** Only the three values above are accepted
+  (case-sensitive); anything else — from an argument, `AGENTSAFE_AUTH_TYPE`,
+  or the config file — raises a `ConfigError` naming the valid values.
+- **`profile` is ignored in principal modes** (see "Settings & file
+  locations" for why it is tolerated, not rejected). `crypto_endpoint` and
+  `key_id` are validated for every mode; missing ones raise a `ConfigError`
+  naming exactly what is missing for the selected mode.
+- **Only Encrypt/Decrypt operations authenticate.** `set`/`get` and
+  `env set`/`env get`/`env encrypt`/`env load` construct the provider.
+  `init`, `config`, `list`, `remove`, `env list`, and `env remove` never do.
+  In particular `init` validates required settings statically (via the OCI
+  provider module's `validate_settings`, the single source of truth also used
+  by `OCIProvider.__init__`, imported only when the provider is `oci`) and
+  never constructs the provider, so `agentsafe init --auth-type instance_principal
+  ...` works from a developer laptop to produce the config that will be
+  committed — instance-principal construction contacts the instance metadata
+  service and OCI IAM, which only works on an OCI instance.
+- **One provider instance per provider name, reused.** Principal-mode
+  construction is not free (metadata-service or injected-credential reads
+  plus a token exchange), and per-call construction would repeat it on every
+  `get()`. `AgentSafe` therefore reuses one provider instance per provider
+  name for its lifetime, and the module-level `env` functions share a
+  process-level cache keyed by provider name and resolved settings. Token
+  refresh is delegated entirely to the OCI SDK signer; agentsafe never
+  caches, inspects, or stores the tokens themselves. (Provider reuse caches
+  a client/signer, not plaintext — it does not conflict with "do not cache
+  decrypted plaintext".)
+- **The ciphertext is auth-agnostic.** Envelopes record the key OCID and
+  version but never the auth mode, so a value encrypted through a profile on
+  a laptop can be decrypted in production via an instance principal (and vice
+  versa) as long as that identity is permitted to use the key.
+- **Failure messages are safe.** Signer-initialization and KMS-call failures
+  surface only a mode-specific, non-sensitive description (for example
+  "OCI instance principal authentication could not be initialized") plus the
+  OCI HTTP status/error code where available — never tokens, certificates,
+  private key material, or injected environment-variable values.
+- **Misconfiguration is slow to fail, by design.** agentsafe deliberately
+  keeps the OCI SDK's default retry policy for the instance metadata service,
+  which is patient so that real instances survive transient metadata errors.
+  The cost is that selecting `instance_principal` on a machine that is not an
+  OCI instance takes a couple of minutes to fail (about 2.5 in testing)
+  before raising the `KMSError`. It fails cleanly, with no traceback and no
+  fallback, and `resource_principal` off-OCI fails immediately; if this ever
+  needs bounding, do it with a retry strategy validated on a real instance.
+- **`region` is not a setting in any mode.** The crypto endpoint is regional,
+  and it is what requests are sent to.
+- **IAM setup is the operator's responsibility.** Principal modes need a
+  dynamic group that matches the instance or resource, and an IAM policy
+  allowing that group to use the key for Encrypt/Decrypt. Like vaults and
+  keys, agentsafe assumes these already exist and never creates or modifies
+  them (see "CLI usage"). Note that IAM policies are scoped by compartment
+  on the IAM side — that is IAM configuration, not an agentsafe setting.
+- **Deferred:** other OCI mechanisms — OKE workload identity, delegation
+  tokens / on-behalf-of, session-token (`oci session authenticate`)
+  profiles — are neither supported nor tested. Each would be a new
+  `auth_type` value if added later.
 
 ## SDK usage (target shape)
 
@@ -254,9 +362,17 @@ safe = AgentSafe(
 safe.set("OPENAI_API_KEY", "sk-...")  # value: str only (see "Value types")
 value = safe.get("OPENAI_API_KEY")  # raises KeyNotFoundError if absent
 safe.remove("OPENAI_API_KEY")
+
+# On an OCI instance / in an OCI Function — no ~/.oci/config or profile needed
+# (see "OCI authentication modes"):
+safe = AgentSafe(
+    auth_type="instance_principal",  # or "resource_principal"; default is "profile"
+    crypto_endpoint="https://<vault>-crypto.kms.<region>.oraclecloud.com",
+    key_id="ocid1.key.oc1..<key-ocid>",
+)
 ```
 
-`profile`/`crypto_endpoint`/`key_id` are OCI-provider settings; other
+`auth_type`/`profile`/`crypto_endpoint`/`key_id` are OCI-provider settings; other
 providers take their own equivalent kwargs (e.g. AWS: `region`, `key_arn`).
 `AgentSafe.__init__` forwards whatever settings are relevant to
 `kms.get_provider(kms_provider, **settings)` rather than hardcoding OCI's
@@ -286,6 +402,7 @@ boilerplate than raw Click).
 
 ```
 agentsafe init   --profile DEFAULT --crypto-endpoint <url> --key-id <ocid>
+agentsafe init   --auth-type instance_principal --crypto-endpoint <url> --key-id <ocid>   # or resource_principal; no --profile
 agentsafe config                         # display project KMS settings; no KMS calls
 agentsafe set    OPENAI_API_KEY [VALUE]   # prompts (hidden input), or reads stdin, if VALUE omitted
 agentsafe get    OPENAI_API_KEY
@@ -301,14 +418,23 @@ settings resolution order.
 file. It never reads, creates, or overwrites `appconfig`; the ciphertext
 store is created lazily by the first `set`. `init` fails only if
 `.agentsafe/config` already exists. It does not create cloud resources
-(vault, key, compartment) — those are assumed to already exist and be
-reachable via the given profile/credentials.
+(vault, key, compartment, dynamic groups, IAM policies) — those are assumed
+to already exist and be reachable via the configured profile or principal.
+
+`init --auth-type` accepts `profile` (default), `instance_principal`, or
+`resource_principal`. `--profile` is required only for `profile`; in principal
+modes it is optional and, if given, recorded but unused. `init` validates the
+required settings for the chosen mode and never authenticates or contacts OCI
+(see "OCI authentication modes"). Every other command selects its auth mode
+from the saved config or `AGENTSAFE_AUTH_TYPE`; none takes an `--auth-type`
+flag.
 
 `config` displays the raw `[agentsafe]` settings from the project-local
 `.agentsafe/config` file in a stable key order. It never contacts KMS or
 decrypts values; this configuration contains only provider identifiers, not
 plaintext secrets or credentials. `config --path <file>` displays an alternate
-configuration file.
+configuration file. Because it shows the raw file, an absent `auth_type` line
+means the OCI default (`profile`), not "unset".
 
 **`list` shows key names only, never decrypted values.** It does not call
 Decrypt at all — fast, and it never puts plaintext secrets on a
@@ -400,7 +526,16 @@ not — see the note under "Status".
 - Never swallow a KMS provider's authentication/authorization errors — wrap
   them in a typed `KMSError`/`ConfigError` using exception chaining, retaining
   the original provider exception as the cause. Do not fall back to an
-  insecure path. This applies uniformly across providers, not just OCI.
+  insecure path. This applies uniformly across providers, not just OCI. In
+  particular there is no fallback between OCI authentication modes: if the
+  selected `auth_type` fails, the operation fails (see "OCI authentication
+  modes").
+- Credentials never touch agentsafe's files or output: profile keys, and the
+  tokens, certificates, and private keys behind instance/resource principals,
+  live only in the OCI SDK's memory and its own config files — never in
+  `appconfig`, `.env`, `.agentsafe/config`, logs, or exception
+  messages/tracebacks. Principal modes must be explicitly selected; agentsafe
+  never picks up an ambient instance or service identity on its own.
 - `list` and `env list` never decrypt (see CLI usage above and "`.env`
   support").
 - Provider name collisions are a hard error, never silently resolved (see
@@ -419,6 +554,10 @@ not — see the note under "Status".
   long as that version isn't disabled/deleted), so this is a hygiene
   improvement to add later once there's real usage to inform the design, not
   a correctness blocker now.
+- **Other OCI authentication mechanisms.** Only profile, instance principal,
+  and resource principal are supported. OKE workload identity, delegation
+  tokens / on-behalf-of, and session-token profiles are deferred until there
+  is demand (see "OCI authentication modes").
 
 Three items previously listed here are no longer applicable: compartment
 name/OCID resolution doesn't apply because compartment isn't an agentsafe
@@ -448,8 +587,10 @@ supplemented.
 
 ## Dependencies (expected)
 
-- `oci` — the OCI Python SDK (`oci.key_management` + `oci.kms_crypto`). Used
-  by `kms/oci_provider.py` only, behind the `agentconfigsafe[oci]` extra.
+- `oci` — the OCI Python SDK (`oci.key_management` + `oci.kms_crypto`, plus
+  `oci.auth.signers` for the instance- and resource-principal signers). Used
+  by `kms/oci_provider.py` only, behind the `agentconfigsafe[oci]` extra; the
+  principal modes add no new dependency.
 - Future provider SDKs are added as optional extras only when their providers
   are implemented (for example, `boto3` for AWS).
 - `typer` — CLI framework.
@@ -507,7 +648,14 @@ Fill these in as the project is scaffolded; keep this section accurate.
   same fake-provider convention rather than introducing a second one.
 - Reserve real KMS calls for a separate integration test suite gated behind
   an explicit marker/env var (e.g. `AGENTSAFE_RUN_INTEGRATION=1`), since
-  those require live cloud credentials and a real vault/key.
+  those require live cloud credentials and a real vault/key. The OCI
+  authentication modes follow the same rule: unit tests patch
+  `oci.config.from_file`, `oci.auth.signers.InstancePrincipalsSecurityTokenSigner`,
+  and `oci.auth.signers.get_resource_principals_signer` and assert how the
+  crypto client is constructed per `auth_type` (and that a failing signer
+  raises `KMSError` with no fallback); real principal authentication can only
+  be exercised on an OCI instance or service, so it belongs in the gated
+  integration suite.
 - Keep `store.py`/`envstore.py` (file formats) and `kms/` (provider calls)
   decoupled from `sdk.py`/`env.py`/`cli.py` (user-facing surface) so either
   can be tested and evolved independently.

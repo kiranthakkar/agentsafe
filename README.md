@@ -38,15 +38,16 @@ Common uses include:
   material.
 - OCI KMS configuration is stored separately in the project-local
   `.agentsafe/config` file, not in `appconfig`/`.env`. Unlike ciphertext,
-  these are identifiers (a key OCID, a crypto endpoint URL, a profile name)
-  — safe to commit alongside the ciphertext they route to, since OCI itself
+  these are identifiers (a key OCID, a crypto endpoint URL, a profile name,
+  an auth mode) — safe to commit alongside the ciphertext they route to, since OCI itself
   never treats an OCID or endpoint as a secret.
 - `get()` decrypts in memory only for the duration of the call (or, for
   `env.load()`, until it populates `os.environ`). Values are not otherwise
   cached by `agentsafe`.
 - `list` and `env list` return names only and never call KMS Decrypt.
-- `agentsafe` relies on OCI's standard profile configuration and IAM. It does
-  not implement a second authentication system.
+- `agentsafe` relies on OCI's own authentication — a profile in
+  `~/.oci/config`, or an instance/resource principal — and on IAM. It does not
+  implement a second authentication system, and never stores tokens or keys.
 - `.env.agent` is the one place a developer types a real secret in the
   clear — it is never committed, and `agentsafe env encrypt` warns if it
   isn't gitignored. The compiled `.env` it produces is always fully
@@ -64,8 +65,51 @@ Install the OCI provider extra in the application environment:
 python -m pip install "agentconfigsafe[oci]"
 ```
 
-You also need an OCI profile in `~/.oci/config`, a vault crypto endpoint, and
-a KMS key that the profile is allowed to use for Encrypt and Decrypt.
+You also need a vault crypto endpoint and a KMS key that your OCI identity is
+allowed to use for Encrypt and Decrypt. That identity is either a profile in
+`~/.oci/config` (the default) or, on OCI, an instance or resource principal —
+see [Authentication](#authentication).
+
+## Authentication
+
+The OCI provider supports three modes, selected by the `auth_type` setting
+(`--auth-type` on `agentsafe init`, the `AGENTSAFE_AUTH_TYPE` environment
+variable, or `auth_type=` in the SDK):
+
+| `auth_type` | Credentials come from | Needs | Use it for |
+|---|---|---|---|
+| `profile` (default) | a profile in `~/.oci/config` | `profile`, `crypto_endpoint`, `key_id` | laptops, CI with an OCI config |
+| `instance_principal` | the OCI compute instance's identity | `crypto_endpoint`, `key_id` | apps on OCI Compute instances |
+| `resource_principal` | credentials an OCI service injects | `crypto_endpoint`, `key_id` | OCI Functions, Data Science, other services with resource principals |
+
+Principal modes need no API key or `~/.oci/config` on the machine at all.
+
+```console
+agentsafe init --auth-type instance_principal \
+  --crypto-endpoint https://<vault>-crypto.kms.<region>.oraclecloud.com \
+  --key-id <key-ocid>
+```
+
+Things worth knowing:
+
+- **Principal modes are opt-in.** There is no auto-detection and no fallback
+  between modes: if the selected mode can't authenticate, the call fails
+  with a clear error rather than trying another identity.
+- **One committed config, several environments.** Commit the config for
+  whichever mode most people use, and override per environment — for example
+  `AGENTSAFE_AUTH_TYPE=instance_principal` on your production instance. A
+  committed `profile` is simply ignored in principal modes.
+- **Ciphertext doesn't depend on how it was written.** A value encrypted with a
+  profile on a laptop can be decrypted by an instance principal in production,
+  as long as IAM lets that principal use the key.
+- **You set up IAM.** Principal modes need a dynamic group matching the
+  instance or resource, and a policy that lets it use the key. agentsafe never
+  creates or changes IAM resources.
+- **`init` never contacts OCI**, so you can generate the config for an
+  instance-principal deployment from your laptop.
+- **Selecting `instance_principal` on a machine that isn't an OCI instance
+  fails cleanly, but slowly** — the OCI SDK retries the instance metadata
+  service for about two and a half minutes before giving up.
 
 ## Quick start: CLI
 
@@ -79,6 +123,9 @@ agentsafe init --profile DEFAULT \
   --key-id <key-ocid>
 agentsafe config  # displays the project KMS configuration; does not contact KMS
 ```
+
+(On OCI, use `--auth-type instance_principal` or `resource_principal` instead
+of `--profile` — see [Authentication](#authentication).)
 
 Store a value. Omitting the value opens a hidden prompt (or reads piped
 stdin); the first `set` creates the local `appconfig` ciphertext store.
@@ -173,13 +220,17 @@ AgentSafe.init(
 )
 ```
 
+On an OCI instance or service, pass `auth_type="instance_principal"` (or
+`"resource_principal"`) instead of `profile=`.
+
 Settings resolve in this order: explicit SDK/CLI arguments, `AGENTSAFE_*`
 environment variables, then the project-local `.agentsafe/config` file. OCI
-is the default provider; OCI requires a profile, crypto endpoint, and key
-OCID — no compartment, since OCI's Encrypt/Decrypt API doesn't take one.
-`profile` is the one setting that legitimately
-varies per developer (it names a profile in *their* `~/.oci/config`) — set
-`AGENTSAFE_PROFILE` locally if it differs from what's committed.
+is the default provider and `profile` the default `auth_type`; OCI always
+requires a crypto endpoint and key OCID (plus a profile in `profile` mode) —
+no compartment, since OCI's Encrypt/Decrypt API doesn't take one. `profile`
+and `auth_type` are the settings that legitimately vary per developer or
+environment — set `AGENTSAFE_PROFILE` or `AGENTSAFE_AUTH_TYPE` locally if they
+differ from what's committed.
 
 ## Examples
 

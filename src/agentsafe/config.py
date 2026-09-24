@@ -16,6 +16,7 @@ CONFIG_PATH = Path(".agentsafe") / "config"
 CONFIG_SECTION = "agentsafe"
 ENVIRONMENT_SETTINGS = {
     "kms_provider": "AGENTSAFE_KMS_PROVIDER",
+    "auth_type": "AGENTSAFE_AUTH_TYPE",
     "profile": "AGENTSAFE_PROFILE",
     "crypto_endpoint": "AGENTSAFE_CRYPTO_ENDPOINT",
     "key_id": "AGENTSAFE_KEY_ID",

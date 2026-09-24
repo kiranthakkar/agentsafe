@@ -1,10 +1,40 @@
 """OCI KMS provider implementation, imported only when OCI is selected."""
 
 from base64 import b64decode, b64encode
+from collections.abc import Mapping
 from typing import Any, cast
 
 from agentsafe.exceptions import ConfigError, KMSError
 from agentsafe.kms.base import EncryptedBlob
+
+AUTH_PROFILE = "profile"
+AUTH_INSTANCE_PRINCIPAL = "instance_principal"
+AUTH_RESOURCE_PRINCIPAL = "resource_principal"
+AUTH_TYPES = (AUTH_PROFILE, AUTH_INSTANCE_PRINCIPAL, AUTH_RESOURCE_PRINCIPAL)
+DEFAULT_AUTH_TYPE = AUTH_PROFILE
+
+_REQUIRED_SETTINGS = {
+    AUTH_PROFILE: ("profile", "crypto_endpoint", "key_id"),
+    AUTH_INSTANCE_PRINCIPAL: ("crypto_endpoint", "key_id"),
+    AUTH_RESOURCE_PRINCIPAL: ("crypto_endpoint", "key_id"),
+}
+
+
+def validate_settings(settings: Mapping[str, Any]) -> str:
+    """Check OCI settings statically and return the effective auth type.
+
+    Never authenticates or contacts OCI. ``auth_type`` defaults to ``profile``
+    when absent; ``profile`` is required (and only used) in that mode.
+    """
+    auth_type = settings.get("auth_type")
+    if auth_type is None:
+        auth_type = DEFAULT_AUTH_TYPE
+    if auth_type not in AUTH_TYPES:
+        raise ConfigError(f"OCI auth_type must be one of: {', '.join(AUTH_TYPES)}")
+    missing = [name for name in _REQUIRED_SETTINGS[auth_type] if not settings.get(name)]
+    if missing:
+        raise ConfigError(f"OCI {auth_type} configuration requires: {', '.join(missing)}")
+    return cast(str, auth_type)
 
 
 class OCIProvider:
@@ -13,22 +43,20 @@ class OCIProvider:
     def __init__(
         self,
         *,
+        auth_type: str | None = None,
         profile: str | None = None,
         crypto_endpoint: str | None = None,
         key_id: str | None = None,
         **_: Any,
     ) -> None:
-        missing = [
-            label
-            for label, value in {
+        mode = validate_settings(
+            {
+                "auth_type": auth_type,
                 "profile": profile,
                 "crypto_endpoint": crypto_endpoint,
                 "key_id": key_id,
-            }.items()
-            if not value
-        ]
-        if missing:
-            raise ConfigError(f"OCI provider requires: {', '.join(missing)}")
+            }
+        )
         try:
             import oci  # type: ignore[import-untyped]
         except ImportError as error:
@@ -36,12 +64,26 @@ class OCIProvider:
                 "provider 'oci' requires oci: pip install agentconfigsafe[oci]"
             ) from error
         try:
-            configuration = oci.config.from_file(profile_name=profile)
-            self._client = oci.key_management.KmsCryptoClient(
-                configuration, service_endpoint=crypto_endpoint
-            )
+            if mode == AUTH_PROFILE:
+                self._client = oci.key_management.KmsCryptoClient(
+                    oci.config.from_file(profile_name=profile), service_endpoint=crypto_endpoint
+                )
+            else:
+                # Principal signers are self-sufficient, so the config is empty. There is
+                # deliberately no fallback to another mode if the signer cannot be built.
+                signer = (
+                    oci.auth.signers.InstancePrincipalsSecurityTokenSigner()
+                    if mode == AUTH_INSTANCE_PRINCIPAL
+                    else oci.auth.signers.get_resource_principals_signer()
+                )
+                self._client = oci.key_management.KmsCryptoClient(
+                    {}, signer=signer, service_endpoint=crypto_endpoint
+                )
         except Exception as error:
-            raise KMSError("could not initialize OCI KMS client") from error
+            if mode == AUTH_PROFILE:
+                raise KMSError("could not initialize OCI KMS client") from error
+            label = mode.replace("_", " ")
+            raise KMSError(f"OCI {label} authentication could not be initialized") from error
         self._key_id = key_id
         self._oci: Any = oci
 

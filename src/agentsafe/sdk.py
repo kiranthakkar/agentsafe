@@ -27,6 +27,9 @@ class AgentSafe:
         """Create a client using explicit, environment, then project-local settings."""
         self.store = ConfigStore(appconfig_path)
         self.settings = resolve_settings(settings, config_path=config_path)
+        # Reused so principal-mode signers (metadata-service reads + token exchange) are
+        # built once, not on every call. This caches a client, never plaintext.
+        self._providers: dict[str, KMSProvider] = {}
 
     @classmethod
     def init(
@@ -37,15 +40,10 @@ class AgentSafe:
     ) -> "AgentSafe":
         """Register the project-local KMS configuration without touching appconfig."""
         resolved = resolve_settings(settings, config_path=config_path)
-        provider = resolved.get("kms_provider", "oci")
-        if provider == "oci":
-            missing = [
-                key
-                for key in ("profile", "crypto_endpoint", "key_id")
-                if not resolved.get(key)
-            ]
-            if missing:
-                raise ConfigError(f"OCI configuration requires: {', '.join(missing)}")
+        if resolved.get("kms_provider", "oci") == "oci":
+            from agentsafe.kms.oci_provider import validate_settings
+
+            validate_settings(resolved)  # static: never authenticates or contacts OCI
         write_config(resolved, config_path)
         return cls(config_path=config_path, **resolved)
 
@@ -74,7 +72,12 @@ class AgentSafe:
         return self.store.list_keys()
 
     def _provider(self, name: str | None = None) -> KMSProvider:
-        return get_provider(name or self.settings["kms_provider"], **self.settings)
+        name = name or self.settings["kms_provider"]
+        provider = self._providers.get(name)
+        if provider is None:
+            provider = get_provider(name, **self.settings)
+            self._providers[name] = provider
+        return provider
 
     @staticmethod
     def _validate_key(key: str) -> None:
